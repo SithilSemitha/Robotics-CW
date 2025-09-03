@@ -3,7 +3,6 @@
 #include <RTClib.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
-#include <Adafruit_NeoPixel.h>
 #include "HX711.h"
 #include <SPI.h>
 #include <SD.h>
@@ -18,11 +17,6 @@ RTC_DS3231 rtc;
 #define ONE_WIRE_BUS 2
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
-
-//LED
-#define LED_PIN 3
-#define NUM_LEDS 7
-Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 // Load Cell (HX711)
 #define LOADCELL_DOUT_PIN 6
@@ -44,6 +38,11 @@ int mealNumber = 1;
 #define BTN_UP     15  // A1
 #define BTN_DOWN   16  // A2
 #define BTN_SELECT 17  // A3
+
+// Temperature LEDs
+#define LED_RED   8
+#define LED_GREEN 3
+#define LED_BLUE  5
 
 // Button state variables 
 bool prevMenuBtn = false;
@@ -70,24 +69,27 @@ bool isButtonPressed(int pin) {
   return (digitalRead(pin) == LOW);
 }
 
-void setLEDColor(float tempC) {
-  uint32_t color;
-  if (tempC < 25.0)
-    color = strip.Color(0, 0, 255);
-  else if (tempC < 30.0)
-    color = strip.Color(0, 255, 0);
-  else
-    color = strip.Color(255, 0, 0);
-
-  for (int i = 0; i < NUM_LEDS; i++) {
-    strip.setPixelColor(i, color);
+void updateTempLEDs(float temp) {
+  if (temp < 25.0) {
+    digitalWrite(LED_BLUE, HIGH);
+    digitalWrite(LED_GREEN, LOW);
+    digitalWrite(LED_RED, LOW);
+  } else if (temp <= 35.0) {
+    digitalWrite(LED_BLUE, LOW);
+    digitalWrite(LED_GREEN, HIGH);
+    digitalWrite(LED_RED, LOW);
+  } else {
+    digitalWrite(LED_BLUE, LOW);
+    digitalWrite(LED_GREEN, LOW);
+    digitalWrite(LED_RED, HIGH);
   }
-  strip.show();
 }
 
+// Turn off all LEDs
 void turnOffLEDs() {
-  strip.clear();
-  strip.show();
+  digitalWrite(LED_RED, LOW);
+  digitalWrite(LED_GREEN, LOW);
+  digitalWrite(LED_BLUE, LOW);
 }
 
 void displayMenu() {
@@ -132,20 +134,74 @@ void displayMenu() {
 }
 
 
-//  Food Timer Alert 
+//food timer
 void foodTimerAlert() {
-  for (int i = 0; i < 5; i++) {
-    for (int j = 0; j < NUM_LEDS; j++) {
-      strip.setPixelColor(j, strip.Color(255, 0, 0));
+  // Turn off all LEDs initially
+  turnOffLEDs();
+  
+  // Alert sequence 
+  for (int cycle = 0; cycle < 3; cycle++) {
+    // Pattern
+    digitalWrite(LED_RED, HIGH);
+    tone(BUZZER_PIN, 1000, 100);  
+    delay(100);                  
+    digitalWrite(LED_RED, LOW);
+    
+    digitalWrite(LED_GREEN, HIGH);
+    tone(BUZZER_PIN, 1500, 100);  
+    delay(100);                   
+    digitalWrite(LED_GREEN, LOW);
+    
+    digitalWrite(LED_BLUE, HIGH);
+    tone(BUZZER_PIN, 2000, 100);  
+    delay(100);                   
+    digitalWrite(LED_BLUE, LOW);
+    
+    delay(50);                    
+    
+    // Pattern 2
+    digitalWrite(LED_RED, HIGH);
+    digitalWrite(LED_GREEN, HIGH);
+    digitalWrite(LED_BLUE, HIGH);
+    tone(BUZZER_PIN, 2500, 150); 
+    delay(150);                  
+    
+    turnOffLEDs();
+    delay(100);                  
+    
+    // Pattern 3
+    for(int flash = 0; flash < 2; flash++) {  
+      digitalWrite(LED_RED, HIGH);
+      digitalWrite(LED_BLUE, LOW);
+      tone(BUZZER_PIN, 1800, 100); 
+      delay(100);                  
+      
+      digitalWrite(LED_RED, LOW);
+      digitalWrite(LED_BLUE, HIGH);
+      tone(BUZZER_PIN, 2200, 100);  
+      delay(100);                   
     }
-    strip.show();
-    tone(BUZZER_PIN, 2000, 500);
-    delay(500);
-
-    strip.clear();
-    strip.show();
-    delay(500);
+    
+    
+    turnOffLEDs();
+    
+    delay(150);                     
   }
+  
+  // Final sequence
+  for(int final = 0; final < 2; final++) { 
+    
+    digitalWrite(LED_RED, HIGH);
+    digitalWrite(LED_GREEN, HIGH);
+    digitalWrite(LED_BLUE, HIGH);
+    tone(BUZZER_PIN, 3000, 100);
+    delay(100);
+    
+    turnOffLEDs();
+    delay(100);
+  }
+  
+ 
 }
 
 // Time setter 
@@ -192,11 +248,6 @@ int setTimeValue(const char* prompt, int minVal, int maxVal, int currentVal) {
     prevSelectBtn = currentSelectBtn;
   }
 }
-
-
-
-
-
 
 //  Food Timer Handler 
 void handleFoodTimer() {
@@ -269,7 +320,19 @@ void checkFoodTimer() {
 
   if (now.unixtime() >= foodEatTime.unixtime()) {
     alarmTriggered = true;
+    
+    // Show alert message
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("TIME TO EAT!");
+    lcd.setCursor(0, 1);
+    lcd.print("Food is ready!");
+    
+    // Trigger LED pattern 
     foodTimerAlert();
+    
+   
+    lcd.clear();
   }
 }
 
@@ -334,17 +397,18 @@ void displayFoodTimerStatus() {
 
 //heating process
 void handleHeatFood() {
-  int options[] = {3, 5, 7};   // minutes
+  // Heating options  30s, 1min, 1.5min
+  int options[] = {30, 60, 90};
   int optionIndex = 0;
   bool prevUpBtn = false, prevDownBtn = false, prevSelectBtn = false;
-  
+
   while (true) {
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("Heat Food Time:");
     lcd.setCursor(0, 1);
-    lcd.print(options[optionIndex]);
-    lcd.print(" min  (OK=Start)");
+    lcd.print(options[optionIndex] / 60.0, 2); // display in minutes
+    lcd.print(" min (OK=Start)");
 
     bool currentUpBtn = isButtonPressed(BTN_UP);
     bool currentDownBtn = isButtonPressed(BTN_DOWN);
@@ -354,41 +418,45 @@ void handleHeatFood() {
       optionIndex = (optionIndex + 1) % 3;
       tone(BUZZER_PIN, 1000, 100);
       delay(200);
-    }
-    else if (currentDownBtn && !prevDownBtn) {
+    } else if (currentDownBtn && !prevDownBtn) {
       optionIndex = (optionIndex - 1 + 3) % 3;
       tone(BUZZER_PIN, 1000, 100);
       delay(200);
-    }
-    else if (currentSelectBtn && !prevSelectBtn) {
+    } else if (currentSelectBtn && !prevSelectBtn) {
       tone(BUZZER_PIN, 1500, 200);
-      int durationSec = options[optionIndex] * 60;
-      
+      int durationSec = options[optionIndex];
+
+      // Start heating
       lcd.clear();
       lcd.setCursor(0, 0);
       lcd.print("Heating for ");
-      lcd.print(options[optionIndex]);
+      lcd.print(durationSec / 60.0, 2);
       lcd.print(" min");
-      
-      digitalWrite(RELAY_PIN, HIGH); // Relay ON
-      
+
+      digitalWrite(RELAY_PIN, LOW); // turn ON heating
       unsigned long start = millis();
+
       while ((millis() - start) / 1000 < durationSec) {
         int remaining = durationSec - (millis() - start) / 1000;
         lcd.setCursor(0, 1);
         lcd.print("Time Left: ");
         lcd.print(remaining);
         lcd.print("s   ");
-        delay(500);
+        delay(500); 
       }
-      
-      digitalWrite(RELAY_PIN, LOW); // Relay OFF
+
+      digitalWrite(RELAY_PIN, HIGH); // turn OFF heating
+
+
       lcd.clear();
       lcd.setCursor(0, 0);
       lcd.print("Heating Done!");
-      foodTimerAlert(); // reuse buzzer + LED alert
+      digitalWrite(LED_RED, HIGH);
+      foodTimerAlert();
       delay(3000);
-      displayMenu();
+      digitalWrite(LED_RED, LOW);
+
+      displayMenu(); 
       return;
     }
 
@@ -400,22 +468,21 @@ void handleHeatFood() {
 }
 
 
-
-
 void saveReport() {
-    // Request temperature
+
+    //  temperature
     sensors.requestTemperatures();
     delay(500);
     float tempC = sensors.getTempCByIndex(0);
 
-    // Get weight from load cell
+    // Get weight
     long weightValue = 0;
     if (scale.is_ready()) weightValue = scale.get_units(5);
 
-    // Safe filename: MEAL01.TXT, MEAL02.TXT, etc.
+    // Safe filename: MEAL01.TXT
     char fileName[12];
     sprintf(fileName, "MEAL%02d.TXT", mealNumber);
-    mealNumber = (mealNumber % 99) + 1; // increment safely
+    mealNumber = (mealNumber % 99) + 1; 
 
     Serial.print("Creating file: "); Serial.println(fileName);
 
@@ -453,17 +520,14 @@ void saveReport() {
     file.print("Weight: "); file.print(weightValue); file.println(" g");
     file.println();
 
-    file.flush(); // ensure all data is written
-    file.close(); // Important to save data
+    file.flush(); 
+    file.close();
 
     Serial.println("Report saved!");
     lcd.clear();
     lcd.print("Meal Saved!");
     delay(1000);
 }
-
-
-
 
 //  Menu Handler 
 void handleMenu() {
@@ -502,51 +566,98 @@ void handleMenu() {
       handleFoodTimer();
     }
     else if (strcmp(menuItems[selectedIndex], "Temperature") == 0) {
-      sensors.requestTemperatures();
-      float t = sensors.getTempCByIndex(0);
-      lcd.clear();
-      lcd.print("Temp: "); lcd.print(t); lcd.print(" C");
-      delay(2000);
-      displayMenu();
+  bool prevMenuTemp = false;
+
+  while (true) {
+    sensors.requestTemperatures();
+    float t = sensors.getTempCByIndex(0);
+
+    // Update LEDs  on temperature
+    updateTempLEDs(t);
+
+
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.print("Temp: "); lcd.print(t); lcd.print(" C");
+  
+
+    
+    bool currentMenuBtn = isButtonPressed(BTN_MENU);
+    if (currentMenuBtn && !prevMenuTemp && millis() - lastButtonPress > 100) {
+      lastButtonPress = millis();
+      break;  
     }
-    else if (strcmp(menuItems[selectedIndex], "Weight") == 0) {
-      lcd.clear();
-      lcd.print("Weight: ");
-      if (scale.is_ready()) lcd.print(scale.get_units(5));
-      else lcd.print("ERR");
-      lcd.print(" g");
-      delay(2000);
-      displayMenu();
-    }
-    else if (strcmp(menuItems[selectedIndex], "Time") == 0) {
-      DateTime now = rtc.now();
-      lcd.clear();
-      lcd.print("Time: ");
-      lcd.print(now.hour()); lcd.print(":"); lcd.print(now.minute());
-      lcd.setCursor(0,1);
-      lcd.print(now.day()); lcd.print("/");
-      lcd.print(now.month()); lcd.print("/");
-      lcd.print(now.year());
-      delay(2000);
-      displayMenu();
-    }
+    prevMenuTemp = currentMenuBtn;
+
+  delay(100); 
+    
   }
 
-  
+ 
+  turnOffLEDs();
+
+  displayMenu(); 
+}
+
+   else if (strcmp(menuItems[selectedIndex], "Weight") == 0) {
+      lcd.clear();
+      lcd.print("Weight: ");
+      if (scale.is_ready()) {
+        float weightKg = scale.get_units(5) / 1000.0; // dis in kg
+        lcd.print(weightKg, 3); 
+      } else {
+        lcd.print("ERR");
+      }
+      lcd.print(" kg");
+      delay(3000);
+      displayMenu();
+    }
+
+    else if (strcmp(menuItems[selectedIndex], "Time") == 0) {
+  bool prevMenuTime = false;
+
+  while (true) {
+    DateTime now = rtc.now();
+    lcd.clear();
+    lcd.print("Time: ");
+    if (now.hour() < 10) lcd.print("0");
+    lcd.print(now.hour()); lcd.print(":");
+    if (now.minute() < 10) lcd.print("0");
+    lcd.print(now.minute());
+
+    lcd.setCursor(0,1);
+    lcd.print(now.day()); lcd.print("/");
+    lcd.print(now.month()); lcd.print("/");
+    lcd.print(now.year());
+    
+
+    // Read menu button
+    bool currentMenuBtn = isButtonPressed(BTN_MENU);
+    if (currentMenuBtn && !prevMenuTime && millis() - lastButtonPress > 100) {
+      lastButtonPress = millis();
+      break;  
+    }
+    prevMenuTime = currentMenuBtn;
+
+    delay(100); 
+  }
+
+  displayMenu(); // show menu after exit
+}
+
+  }
+
   prevUpBtn = currentUpBtn;
   prevDownBtn = currentDownBtn;
   prevSelectBtn = currentSelectBtn;
   prevMenuBtn = currentMenuBtn;
 }
 
-
-
-
 // Setup 
 void setup() {
-  Serial.begin(9600);         // Start serial monitor
-  lcd.begin();                // Initialize LCD
-  lcd.backlight();            // Turn on backlight
+  Serial.begin(9600);         
+  lcd.begin();                
+  lcd.backlight();           
 
   // Buttons 
   pinMode(BTN_MENU, INPUT_PULLUP);
@@ -554,20 +665,23 @@ void setup() {
   pinMode(BTN_DOWN, INPUT_PULLUP);
   pinMode(BTN_SELECT, INPUT_PULLUP);
 
-  pinMode(BUZZER_PIN, OUTPUT);  // Buzzer output
-  pinMode(RELAY_PIN, OUTPUT);   // Peltier relay
-  digitalWrite(RELAY_PIN, LOW); // Ensure relay is off initially
+  pinMode(BUZZER_PIN, OUTPUT);  
+  pinMode(RELAY_PIN, OUTPUT);   
+  digitalWrite(RELAY_PIN, HIGH);
 
-  // NeoPixel 
-  strip.begin();
-  strip.show();  // Initialize all pixels to off
+  pinMode(LED_RED, OUTPUT);
+  pinMode(LED_GREEN, OUTPUT);
+  pinMode(LED_BLUE, OUTPUT);
+
+  // Initialize all LEDs as OFF
+  turnOffLEDs();
 
   // RTC 
   if (!rtc.begin()) {
     lcd.clear();
     lcd.print("RTC failed");
     Serial.println("RTC failed");
-    while (1); // Halt execution if RTC fails
+    while (1); 
   }
 
   //  SD Card 
@@ -576,7 +690,7 @@ void setup() {
     lcd.clear();
     lcd.print("SD init failed!");
     Serial.println("SD init failed!");
-    while (1); // Stop execution if SD fails
+    while (1); 
   }
 
   // Load Cell 
@@ -587,17 +701,14 @@ void setup() {
   // Temperature Sensor 
   sensors.begin();
 
-  // Start menu 
+
   inMenu = true;
   displayMenu();
 }
 
-// Main Loop 
+//  Loop 
 void loop() {
   if (inMenu) handleMenu();
   
   checkFoodTimer();
 }
-
-
-
